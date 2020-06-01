@@ -1,22 +1,83 @@
+#include <Wire.h>
 #include <Servo.h>
+#include <MPU9250.h>
+#include "i2c_BMP280.h"
+#include "i2c.h"
 
 Servo ESC;     // create servo object to control the ESC
+MPU9250 mpu;
+BMP280 bmp280;
 
 int potValue;  // value from the analog pin
-int PWM_1, PWM_2, PWM_3, PWM_4;
+int PWM_1 = 0, PWM_2, PWM_3, PWM_4;
+float temperature, pascal;
+static float meters, metersold;
 
 void setup() {
+  metersold = (metersold * 10 + meters) / 11;
   Serial.begin(9600);
-  // Attach the ESC on pin 9
+  Serial.print("Probe BMP280: ");
+  if (bmp280.initialize()) Serial.println("Sensor found");
+  else
+  {
+    Serial.println("Sensor missing");
+    while (1) {}
+  }
+  bmp280.setEnabled(0);
+  bmp280.triggerMeasurement();
   ESC.attach(PWM_1, 1000, 2000); //CW 1
   ESC.attach(PWM_2, 1000, 2000); //CW 3
   ESC.attach(PWM_3, 1000, 2000); //CCW 2
   ESC.attach(PWM_4, 1000, 2000); //CCW 4
+  Wire.begin();
+  delay(2000);
+  mpu.setup();
 }
 void loop()
 {
-  potValue = analogRead(A0);   // reads the value of the potentiometer (value between 0 and 1023)
-  potValue = map(potValue, 0, 1023, 1000, 2000);   // scale it to use it with the servo library (value between 0 and 180)
-  ESC.write(potValue);    // Send the signal to the ESC
+
+  PID();
+  //altitud();
+  //rollpitchyaw();
+}
+void PID()
+{
+  potValue = analogRead(PWM_1);
+  potValue = map(potValue, 0, 1023, 1000, 2000);
+  ESC.write(potValue);
   Serial.println(potValue);
+}
+
+void rollpitchyaw()
+{
+  static uint32_t prev_ms = millis();
+  if ((millis() - prev_ms) > 16)
+  {
+    mpu.update();
+    mpu.print();
+    Serial.print("roll  (x-forward (north)) : ");
+    Serial.print(mpu.getRoll());
+    Serial.print("pitch (y-right (east))    : ");
+    Serial.print(mpu.getPitch());
+    Serial.print("yaw   (z-down (down))     : ");
+    Serial.println(mpu.getYaw());
+    prev_ms = millis();
+  }
+}
+void altitud()
+{
+  bmp280.awaitMeasurement();
+  bmp280.getTemperature(temperature);
+  bmp280.getPressure(pascal);
+  bmp280.getAltitude(meters);
+  bmp280.triggerMeasurement();
+  Serial.print(" HeightPT1: ");
+  Serial.print(metersold);
+  Serial.print(" m; Height: ");
+  Serial.print(meters);
+  Serial.print(" Pressure: ");
+  Serial.print(pascal);
+  Serial.print(" Pa; T: ");
+  Serial.print(temperature);
+  Serial.println(" C");
 }
