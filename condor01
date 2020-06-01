@@ -1,5 +1,3 @@
-#include <BrushlessServo.h>
-#include <SinArray.h>
 #include <Servo.h>
 
 Servo ESC;     // create servo object to control the ESC
