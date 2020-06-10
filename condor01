@@ -6,31 +6,44 @@
 #include <math.h>
 #include <PID_v1.h>
 #include <Arduino.h>
+#include <VL53L0X.h>
 
 #define PIN_INPUT 0
 #define PIN_OUTPUT 2
 
-double Setpoint, Input, Output;
+double Setpoint_roll, Input_roll, Output_roll;
 double Kp = 0.04, Kd = 0.9, Ki = 0.03;
-PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
+PID myPID_roll(&Input_roll, &Output_roll, &Setpoint_roll, Kp, Ki, Kd, DIRECT);
 
 float PWM_roll, PWM_yaw, PWM_pitch, PWM_thrust;
 
 int PIN_1 = 2, PIN_2 = 3, PIN_3 = 4, PIN_4 = 5;
 float PID_roll, PID_yaw, PID_pitch;
-float temperature, pressure, alt;
+float temperature, pressure, altitudbar;
+int altitudlaser;
 
 Servo ESC1, ESC2, ESC3, ESC4;  // create servo object to control the ESC
+
 BMP280_DEV bmp280;
 MPU9250 mpu;
+VL53L0X laseralt;
 
 void setup()
 {
   Serial.begin(9600);
   Wire.begin();
-  bmp280.begin(0X76);                                // Default initialisation, place the BMP280 into SLEEP_MODE
-  bmp280.setTimeStandby(TIME_STANDBY_1000MS);     // Set the standby time to 1s
-  bmp280.startNormalConversion();                 // Start NORMAL conversion mode
+
+  laseralt.setTimeout(500);
+  if (!laseralt.init())
+  {
+    Serial.println("Failed to detect and initialize sensor!");
+    while (1) {}
+  }
+  laseralt.startContinuous(20);
+
+  bmp280.begin(0X76);
+  bmp280.setTimeStandby(TIME_STANDBY_1000MS);
+  bmp280.startNormalConversion();
   mpu.setup();
 
   ESC1.attach(PIN_1, 1000, 2000); //CW 1
@@ -49,62 +62,38 @@ void setup()
   ESC4.write(180);
 
   mpu.update();
-  bmp280.getMeasurements(temperature, pressure, alt);
+  bmp280.getMeasurements(temperature, pressure, altitudbar);
 
-  Input = PID_roll;
-  Setpoint = 0;
-  myPID.SetMode(AUTOMATIC);
+  Input_roll = PID_roll;
+  Setpoint_roll = 0;
+  myPID_roll.SetMode(AUTOMATIC);
+
 }
+
 void loop()
 {
-  PIDE();
-  altitud();
   rollpitchyaw();
+  altitud();
+  PIDE();
 }
+
 void PIDE()
 {
-  Input = PID_roll;
-  myPID.Compute();
-  PWM_roll = map(Output, 0, 255, 0, 180);
+  Input_roll = PID_roll;
+  myPID_roll.Compute();
+  PWM_roll = map(Output_roll, 0, 255, 0, 180);
   ESC2.write(PWM_roll);//CCW
   ESC3.write(PWM_roll);//CW
+  Serial.print(PWM_roll);
+  Serial.print(" ");
+
   PID_roll = PID_roll - Kp;
   ESC1.write(PWM_roll);//CW
   ESC4.write(PWM_roll);//CCW
-  Serial.print(Output);
-  Serial.print(" ");
-
-  Input = PID_pitch;
-  myPID.Compute();
-  PWM_pitch = map(Output, 0, 255, 0, 180);
-  ESC1.write(PWM_pitch);//CW
-  ESC2.write(PWM_pitch);//CCW
-  PID_pitch = PID_pitch - Kp;
-  ESC3.write(PWM_pitch);//CW
-  ESC4.write(PWM_pitch);//CCW
-  Serial.print(Output);
-  Serial.print(" ");
-
-  Input = PID_yaw;
-  myPID.Compute();
-  PWM_yaw = map(Output, 0, 255, 0, 180);
-  ESC1.write(PWM_yaw);//CW
-  ESC3.write(PWM_yaw);//CW
-  PID_yaw = PID_yaw - Kp;
-  ESC2.write(PWM_yaw);//CCW
-  ESC4.write(PWM_yaw);//CCW
-  Serial.print(Output);
-  Serial.print(" ");
-
-  Input = alt;
-  myPID.Compute();
-  PWM_thrust = map(Output, 0, 255, 0, 180);
-  ESC1.write(PWM_thrust);//CW
-  ESC3.write(PWM_thrust);//CW
-  ESC2.write(PWM_thrust);//CCW
-  ESC4.write(PWM_thrust);//CCW
-  Serial.println("");
+  Serial.print(PWM_roll);
+  Serial.println(" ");
 }
+
 void rollpitchyaw()
 {
   static uint32_t prev_ms = millis();
@@ -117,7 +106,9 @@ void rollpitchyaw()
     prev_ms = millis();
   }
 }
+
 void altitud()
 {
-  bmp280.getMeasurements(temperature, pressure, alt);
+  bmp280.getMeasurements(temperature, pressure, altitudbar);
+  altitudlaser = laseralt.readRangeContinuousMillimeters();
 }
