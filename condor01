@@ -1,83 +1,123 @@
+#include <BMP280_DEV.h>
+#include <Device.h>
 #include <Wire.h>
 #include <Servo.h>
 #include <MPU9250.h>
-#include "i2c_BMP280.h"
-#include "i2c.h"
+#include <math.h>
+#include <PID_v1.h>
+#include <Arduino.h>
 
-Servo ESC;     // create servo object to control the ESC
+#define PIN_INPUT 0
+#define PIN_OUTPUT 2
+
+double Setpoint, Input, Output;
+double Kp = 0.04, Kd = 0.9, Ki = 0.03;
+PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
+
+float PWM_roll, PWM_yaw, PWM_pitch, PWM_thrust;
+
+int PIN_1 = 2, PIN_2 = 3, PIN_3 = 4, PIN_4 = 5;
+float PID_roll, PID_yaw, PID_pitch;
+float temperature, pressure, alt;
+
+Servo ESC1, ESC2, ESC3, ESC4;  // create servo object to control the ESC
+BMP280_DEV bmp280;
 MPU9250 mpu;
-BMP280 bmp280;
 
-int potValue;  // value from the analog pin
-int PWM_1 = 0, PWM_2, PWM_3, PWM_4;
-float temperature, pascal;
-static float meters, metersold;
-
-void setup() {
-  metersold = (metersold * 10 + meters) / 11;
+void setup()
+{
   Serial.begin(9600);
-  Serial.print("Probe BMP280: ");
-  if (bmp280.initialize()) Serial.println("Sensor found");
-  else
-  {
-    Serial.println("Sensor missing");
-    while (1) {}
-  }
-  bmp280.setEnabled(0);
-  bmp280.triggerMeasurement();
-  ESC.attach(PWM_1, 1000, 2000); //CW 1
-  ESC.attach(PWM_2, 1000, 2000); //CW 3
-  ESC.attach(PWM_3, 1000, 2000); //CCW 2
-  ESC.attach(PWM_4, 1000, 2000); //CCW 4
   Wire.begin();
-  delay(2000);
+  bmp280.begin(0X76);                                // Default initialisation, place the BMP280 into SLEEP_MODE
+  bmp280.setTimeStandby(TIME_STANDBY_1000MS);     // Set the standby time to 1s
+  bmp280.startNormalConversion();                 // Start NORMAL conversion mode
   mpu.setup();
+
+  ESC1.attach(PIN_1, 1000, 2000); //CW 1
+  ESC2.attach(PIN_2, 1000, 2000); //CW 3
+  ESC3.attach(PIN_3, 1000, 2000); //CCW 2
+  ESC4.attach(PIN_4, 1000, 2000); //CCW 4
+  delay(7000);
+  ESC1.write(0);
+  ESC2.write(0);
+  ESC3.write(0);
+  ESC4.write(0);
+  delay(3000);
+  ESC1.write(180);
+  ESC2.write(180);
+  ESC3.write(180);
+  ESC4.write(180);
+
+  mpu.update();
+  bmp280.getMeasurements(temperature, pressure, alt);
+
+  Input = PID_roll;
+  Setpoint = 0;
+  myPID.SetMode(AUTOMATIC);
 }
 void loop()
 {
-
-  PID();
-  //altitud();
-  //rollpitchyaw();
+  PIDE();
+  altitud();
+  rollpitchyaw();
 }
-void PID()
+void PIDE()
 {
-  potValue = analogRead(PWM_1);
-  potValue = map(potValue, 0, 1023, 1000, 2000);
-  ESC.write(potValue);
-  Serial.println(potValue);
-}
+  Input = PID_roll;
+  myPID.Compute();
+  PWM_roll = map(Output, 0, 255, 0, 180);
+  ESC2.write(PWM_roll);//CCW
+  ESC3.write(PWM_roll);//CW
+  PID_roll = PID_roll - Kp;
+  ESC1.write(PWM_roll);//CW
+  ESC4.write(PWM_roll);//CCW
+  Serial.print(Output);
+  Serial.print(" ");
 
+  Input = PID_pitch;
+  myPID.Compute();
+  PWM_pitch = map(Output, 0, 255, 0, 180);
+  ESC1.write(PWM_pitch);//CW
+  ESC2.write(PWM_pitch);//CCW
+  PID_pitch = PID_pitch - Kp;
+  ESC3.write(PWM_pitch);//CW
+  ESC4.write(PWM_pitch);//CCW
+  Serial.print(Output);
+  Serial.print(" ");
+
+  Input = PID_yaw;
+  myPID.Compute();
+  PWM_yaw = map(Output, 0, 255, 0, 180);
+  ESC1.write(PWM_yaw);//CW
+  ESC3.write(PWM_yaw);//CW
+  PID_yaw = PID_yaw - Kp;
+  ESC2.write(PWM_yaw);//CCW
+  ESC4.write(PWM_yaw);//CCW
+  Serial.print(Output);
+  Serial.print(" ");
+
+  Input = alt;
+  myPID.Compute();
+  PWM_thrust = map(Output, 0, 255, 0, 180);
+  ESC1.write(PWM_thrust);//CW
+  ESC3.write(PWM_thrust);//CW
+  ESC2.write(PWM_thrust);//CCW
+  ESC4.write(PWM_thrust);//CCW
+  Serial.println("");
+}
 void rollpitchyaw()
 {
   static uint32_t prev_ms = millis();
   if ((millis() - prev_ms) > 16)
   {
     mpu.update();
-    mpu.print();
-    Serial.print("roll  (x-forward (north)) : ");
-    Serial.print(mpu.getRoll());
-    Serial.print("pitch (y-right (east))    : ");
-    Serial.print(mpu.getPitch());
-    Serial.print("yaw   (z-down (down))     : ");
-    Serial.println(mpu.getYaw());
+    PID_pitch = mpu.getPitch();
+    PID_yaw = mpu.getYaw();
+    PID_roll = mpu.getRoll();
     prev_ms = millis();
   }
 }
 void altitud()
 {
-  bmp280.awaitMeasurement();
-  bmp280.getTemperature(temperature);
-  bmp280.getPressure(pascal);
-  bmp280.getAltitude(meters);
-  bmp280.triggerMeasurement();
-  Serial.print(" HeightPT1: ");
-  Serial.print(metersold);
-  Serial.print(" m; Height: ");
-  Serial.print(meters);
-  Serial.print(" Pressure: ");
-  Serial.print(pascal);
-  Serial.print(" Pa; T: ");
-  Serial.print(temperature);
-  Serial.println(" C");
+  bmp280.getMeasurements(temperature, pressure, alt);
 }
