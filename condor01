@@ -7,26 +7,42 @@
 #include <PID_v1.h>
 #include <Arduino.h>
 #include <VL53L0X.h>
+#include <IRremote.h>
 
 #define PIN_INPUT 0
 #define PIN_OUTPUT 2
 
 double Setpoint_roll, Input_roll, Output_roll;
+double Setpoint_alt, Input_alt, Output_alt;
+
 double Kp = 0.04, Kd = 0.9, Ki = 0.03;
 PID myPID_roll(&Input_roll, &Output_roll, &Setpoint_roll, Kp, Ki, Kd, DIRECT);
+PID myPID_alt(&Input_alt, &Output_alt, &Setpoint_alt, Kp, Ki, Kd, DIRECT);
 
-float PWM_roll, PWM_yaw, PWM_pitch, PWM_thrust;
+int PWM_roll, PWM_yaw, PWM_pitch, PWM_thrust = 0;
+int pwmmax = 255, pwmmin = 0;
 
 int PIN_1 = 2, PIN_2 = 3, PIN_3 = 4, PIN_4 = 5;
-float PID_roll, PID_yaw, PID_pitch;
+float PID_roll, PID_yaw, PID_pitch, PID_alt;
 float temperature, pressure, altitudbar;
-int altitudlaser;
+int altitudlaser, ONOFF = 0;
+
+int RECV_PIN = 22;
+int lastButtonState;
+int codeType = -1; // The type of code
+unsigned long codeValue; // The code value if not raw
+unsigned int rawCodes[RAWBUF]; // The durations if raw
+int codeLen; // The length of the code
+int toggle = 0; // The RC5/6 toggle state
 
 Servo ESC1, ESC2, ESC3, ESC4;  // create servo object to control the ESC
 
 BMP280_DEV bmp280;
 MPU9250 mpu;
 VL53L0X laseralt;
+IRrecv irrecv(RECV_PIN);
+IRsend irsend;
+decode_results results;
 
 void setup()
 {
@@ -46,51 +62,80 @@ void setup()
   bmp280.startNormalConversion();
   mpu.setup();
 
-  ESC1.attach(PIN_1, 1000, 2000); //CW 1
-  ESC2.attach(PIN_2, 1000, 2000); //CW 3
-  ESC3.attach(PIN_3, 1000, 2000); //CCW 2
-  ESC4.attach(PIN_4, 1000, 2000); //CCW 4
-  delay(7000);
-  ESC1.write(0);
-  ESC2.write(0);
-  ESC3.write(0);
-  ESC4.write(0);
-  delay(3000);
-  ESC1.write(180);
-  ESC2.write(180);
-  ESC3.write(180);
-  ESC4.write(180);
+  erstellenpwm();
 
   mpu.update();
+
   bmp280.getMeasurements(temperature, pressure, altitudbar);
 
   Input_roll = PID_roll;
   Setpoint_roll = 0;
   myPID_roll.SetMode(AUTOMATIC);
 
+  Input_alt = PID_alt;
+  Setpoint_alt = 0;
+  myPID_alt.SetMode(AUTOMATIC);
+
+  delay(3000);
+
+  irrecv.enableIRIn(); // Start the receiver
 }
 
 void loop()
 {
-  rollpitchyaw();
-  altitud();
-  PIDE();
+  if (ONOFF == 1)
+  {
+    //rollpitchyaw();
+    //altitud();
+    //PIDE_roll();
+    //PIDE_yaw();
+    PIDE_altitud();
+  }
+
+  if (ONOFF == 0)
+  {
+    ESC1.write(pwmmin);
+    ESC2.write(pwmmin);
+    ESC3.write(pwmmin);
+    ESC4.write(pwmmin);
+  }
+  irramote();
 }
 
-void PIDE()
+void PIDE_roll()
 {
   Input_roll = PID_roll;
   myPID_roll.Compute();
-  PWM_roll = map(Output_roll, 0, 255, 0, 180);
+  PWM_roll = Output_roll;
+  
   ESC2.write(PWM_roll);//CCW
   ESC3.write(PWM_roll);//CW
-  Serial.print(PWM_roll);
-  Serial.print(" ");
 
   PID_roll = PID_roll - Kp;
   ESC1.write(PWM_roll);//CW
   ESC4.write(PWM_roll);//CCW
-  Serial.print(PWM_roll);
+}
+
+void PIDE_yaw()
+{
+
+}
+void PIDE_altitud()
+{
+  ESC2.write(PWM_thrust);//CCW
+  ESC3.write(PWM_thrust);//CW
+  ESC1.write(PWM_thrust);//CW
+  ESC4.write(PWM_thrust);//CCW
+
+  Serial.print(ESC1.read());
+  Serial.print(" ");
+  Serial.print(ESC2.read());
+  Serial.print(" ");
+  Serial.print(ESC4.read());
+  Serial.print(" ");
+  Serial.print(ESC4.read());
+  Serial.print(" ");
+  Serial.print(PWM_thrust);
   Serial.println(" ");
 }
 
@@ -107,8 +152,99 @@ void rollpitchyaw()
   }
 }
 
+void erstellenpwm()
+{
+  ESC1.attach(PIN_1, pwmmin, pwmmax); //CW 1
+  ESC2.attach(PIN_2, pwmmin, pwmmax); //CW 3
+  ESC3.attach(PIN_3, pwmmin, pwmmax); //CCW 2
+  ESC4.attach(PIN_4, pwmmin, pwmmax); //CCW 4
+
+  delay(7000);
+  ESC1.write(pwmmax);
+  ESC2.write(pwmmax);
+  ESC3.write(pwmmax);
+  ESC4.write(pwmmax);
+
+  delay(3000);
+
+  ESC1.write(pwmmin);
+  ESC2.write(pwmmin);
+  ESC3.write(pwmmin);
+  ESC4.write(pwmmin);
+}
+
 void altitud()
 {
   bmp280.getMeasurements(temperature, pressure, altitudbar);
   altitudlaser = laseralt.readRangeContinuousMillimeters();
+}
+
+void irramote()
+{
+  if (irrecv.decode(&results)) {
+    storeCode(&results);
+    switch (codeValue)
+    {
+      case 16761405:
+        Serial.println("play");
+        ONOFF = 1;
+        break;
+      case 16748655:
+        Serial.println("eq");
+        ONOFF = 0;
+        break;
+      case 16754775:
+        Serial.println(PWM_thrust);
+        PWM_thrust = PWM_thrust + 1;
+        break;
+      case 16769055:
+        Serial.println("vol-");
+        PWM_thrust = PWM_thrust - 1;
+        break;
+      case 16712445:
+        Serial.println("next>>");
+        break;
+      case 16720605:
+        Serial.println("next<<");
+        break;
+      case 16753245:
+        Serial.println("ch-");
+        break;
+      case 16769565:
+        Serial.println("ch+");
+        break;
+      case 16736925:
+        Serial.println("ch");
+        erstellenpwm();
+        break;
+      default:
+        Serial.println(codeValue);
+        break;
+    }
+    irrecv.resume(); // resume receiver
+  }
+}
+
+void storeCode(decode_results *results) {
+  codeType = results->decode_type;
+  if (codeType == UNKNOWN) {
+    codeLen = results->rawlen - 1;
+    for (int i = 1; i <= codeLen; i++) {
+      if (i % 2) {
+        rawCodes[i - 1] = results->rawbuf[i] * USECPERTICK - MARK_EXCESS;
+      }
+      else {
+        rawCodes[i - 1] = results->rawbuf[i] * USECPERTICK + MARK_EXCESS;
+      }
+    }
+  }
+  else {
+    if (codeType == NEC) {
+      if (results->value == REPEAT) {
+        return;
+      }
+    }
+    codeValue = results->value;
+    codeLen = results->bits;
+  }
 }
