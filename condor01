@@ -4,50 +4,52 @@
 #include <Servo.h>
 #include <MPU9250.h>
 #include <math.h>
-#include <PID_v1.h>
 #include <Arduino.h>
 #include <VL53L0X.h>
-#include <IRremote.h>
 
-#define PIN_INPUT 0
-#define PIN_OUTPUT 2
+float Kp = 0.04, Kd = 0.9, Ki = 0.03;
+int pid_max_yaw = 180, pid_max_pitch = 180, pid_max_roll = 80; //maximum output = degrees/s maximum range
+float iError_yaw, dError_yaw, previouspError_yaw;
+float  previouspError_pitch;
+float dError_roll, previouspError_roll;
+float pid_i_yaw = Ki, pid_i_pitch = Ki, pid_i_roll = Ki; //store integral calculations to monitor windup
+int previous_pid_output_yaw, previous_pid_output_pitch, previous_pid_output_roll;
+float pid_input_yaw, pid_input_pitch, pid_input_roll;
+float pid_output_yaw, pid_output_pitch, pid_output_roll;
+float pid_setpoint_yaw = 0, pid_setpoint_pitch = 0, pid_setpoint_roll = 0;
+float pid_p_gain_pitch = Kp, pid_i_gain_pitch = Ki, pid_d_gain_pitch = Kd;
+float pid_p_gain_roll = Kp, pid_i_gain_roll = Ki, pid_d_gain_roll = Kd;
+float pid_p_gain_yaw = Kp, pid_i_gain_yaw = Ki, pid_d_gain_yaw = Kd;
+float pError_yaw, iError_pitch, pError_pitch, dError_pitch, iError_roll, pError_roll;
 
-double Setpoint_roll, Input_roll, Output_roll;
-double Setpoint_alt, Input_alt, Output_alt;
+const int numReadingsr = 10, numReadingsp = 10, numReadingsy = 10;
+int readingsr[numReadingsr], readingsp[numReadingsp], readingsy[numReadingsy];
+int readIndexr = 0, readIndexp = 0, readIndexy = 0;
+int totalr = 0, totalp = 0, totaly = 0;
+int averager = 0, averagep = 0, averagey = 0;
 
-double Kp = 0.04, Kd = 0.9, Ki = 0.03;
-PID myPID_roll(&Input_roll, &Output_roll, &Setpoint_roll, Kp, Ki, Kd, DIRECT);
-PID myPID_alt(&Input_alt, &Output_alt, &Setpoint_alt, Kp, Ki, Kd, DIRECT);
-
-int PWM_roll, PWM_yaw, PWM_pitch, PWM_thrust = 0;
+int PWM_roll, PWM_yaw, PWM_pitch, PWM_thrust = 10;
 int pwmmax = 255, pwmmin = 0;
 
 int PIN_1 = 2, PIN_2 = 3, PIN_3 = 4, PIN_4 = 5;
+int ledPin = 23;
 float PID_roll, PID_yaw, PID_pitch, PID_alt;
 float temperature, pressure, altitudbar;
-int altitudlaser, ONOFF = 0;
-
-int RECV_PIN = 22;
-int lastButtonState;
-int codeType = -1; // The type of code
-unsigned long codeValue; // The code value if not raw
-unsigned int rawCodes[RAWBUF]; // The durations if raw
-int codeLen; // The length of the code
-int toggle = 0; // The RC5/6 toggle state
+int altitudlaser, ONOFF = 1, resetpid = 1;;
 
 Servo ESC1, ESC2, ESC3, ESC4;  // create servo object to control the ESC
 
 BMP280_DEV bmp280;
 MPU9250 mpu;
 VL53L0X laseralt;
-IRrecv irrecv(RECV_PIN);
-IRsend irsend;
-decode_results results;
 
 void setup()
 {
   Serial.begin(9600);
   Wire.begin();
+
+  pinMode(ledPin, OUTPUT);
+  digitalWrite(ledPin, HIGH);
 
   laseralt.setTimeout(500);
   if (!laseralt.init())
@@ -65,78 +67,41 @@ void setup()
   erstellenpwm();
 
   mpu.update();
-
   bmp280.getMeasurements(temperature, pressure, altitudbar);
 
-  Input_roll = PID_roll;
-  Setpoint_roll = 0;
-  myPID_roll.SetMode(AUTOMATIC);
+  delay(2000);
 
-  Input_alt = PID_alt;
-  Setpoint_alt = 0;
-  myPID_alt.SetMode(AUTOMATIC);
+  for (int thisReading = 0; thisReading < numReadingsr; thisReading++) {
+    readingsr[thisReading] = 0;
+  }
+  for (int thisReading = 0; thisReading < numReadingsp; thisReading++) {
+    readingsp[thisReading] = 0;
+  }
+  for (int thisReading = 0; thisReading < numReadingsy; thisReading++) {
+    readingsy[thisReading] = 0;
+  }
 
-  delay(3000);
-
-  irrecv.enableIRIn(); // Start the receiver
+  ledblink();
 }
 
 void loop()
 {
   if (ONOFF == 1)
   {
-    //rollpitchyaw();
-    //altitud();
-    //PIDE_roll();
-    //PIDE_yaw();
-    PIDE_altitud();
+    digitalWrite(ledPin, HIGH);
+    rollpitchyaw();
+    altitud();
+    PIDE();
   }
 
   if (ONOFF == 0)
   {
+    digitalWrite(ledPin, LOW);
     ESC1.write(pwmmin);
     ESC2.write(pwmmin);
     ESC3.write(pwmmin);
     ESC4.write(pwmmin);
   }
-  irramote();
-}
-
-void PIDE_roll()
-{
-  Input_roll = PID_roll;
-  myPID_roll.Compute();
-  PWM_roll = Output_roll;
-  
-  ESC2.write(PWM_roll);//CCW
-  ESC3.write(PWM_roll);//CW
-
-  PID_roll = PID_roll - Kp;
-  ESC1.write(PWM_roll);//CW
-  ESC4.write(PWM_roll);//CCW
-}
-
-void PIDE_yaw()
-{
-
-}
-void PIDE_altitud()
-{
-  ESC2.write(PWM_thrust);//CCW
-  ESC3.write(PWM_thrust);//CW
-  ESC1.write(PWM_thrust);//CW
-  ESC4.write(PWM_thrust);//CCW
-
-  Serial.print(ESC1.read());
-  Serial.print(" ");
-  Serial.print(ESC2.read());
-  Serial.print(" ");
-  Serial.print(ESC4.read());
-  Serial.print(" ");
-  Serial.print(ESC4.read());
-  Serial.print(" ");
-  Serial.print(PWM_thrust);
-  Serial.println(" ");
 }
 
 void rollpitchyaw()
@@ -145,9 +110,37 @@ void rollpitchyaw()
   if ((millis() - prev_ms) > 16)
   {
     mpu.update();
-    PID_pitch = mpu.getPitch();
-    PID_yaw = mpu.getYaw();
-    PID_roll = mpu.getRoll();
+
+    totalp = totalp - readingsp[readIndexp];
+    readingsp[readIndexp] =  mpu.getRoll();
+    totalp = totalp + readingsp[readIndexp];
+    readIndexp = readIndexp + 1;
+    if (readIndexp >= numReadingsp) {
+      readIndexp = 0;
+    }
+    averagep = totalp / numReadingsp;
+    pid_input_pitch = averagep;
+
+    totaly = totaly - readingsy[readIndexy];
+    readingsy[readIndexy] = mpu.getYaw();
+    totaly = totaly + readingsy[readIndexy];
+    readIndexy = readIndexy + 1;
+    if (readIndexy >= numReadingsy) {
+      readIndexy = 0;
+    }
+    averagey = totaly / numReadingsy;
+    pid_input_yaw = averagey;
+
+    totalr = totalr - readingsr[readIndexr];
+    readingsr[readIndexr] = mpu.getPitch();
+    totalr = totalr + readingsr[readIndexr];
+    readIndexr = readIndexr + 1;
+    if (readIndexr >= numReadingsr) {
+      readIndexr = 0;
+    }
+    averager = totalr / numReadingsr;
+    pid_input_roll = averager;
+
     prev_ms = millis();
   }
 }
@@ -166,11 +159,12 @@ void erstellenpwm()
   ESC4.write(pwmmax);
 
   delay(3000);
-
   ESC1.write(pwmmin);
   ESC2.write(pwmmin);
   ESC3.write(pwmmin);
   ESC4.write(pwmmin);
+
+  ledblink();
 }
 
 void altitud()
@@ -179,72 +173,98 @@ void altitud()
   altitudlaser = laseralt.readRangeContinuousMillimeters();
 }
 
-void irramote()
+void ledblink()
 {
-  if (irrecv.decode(&results)) {
-    storeCode(&results);
-    switch (codeValue)
-    {
-      case 16761405:
-        Serial.println("play");
-        ONOFF = 1;
-        break;
-      case 16748655:
-        Serial.println("eq");
-        ONOFF = 0;
-        break;
-      case 16754775:
-        Serial.println(PWM_thrust);
-        PWM_thrust = PWM_thrust + 1;
-        break;
-      case 16769055:
-        Serial.println("vol-");
-        PWM_thrust = PWM_thrust - 1;
-        break;
-      case 16712445:
-        Serial.println("next>>");
-        break;
-      case 16720605:
-        Serial.println("next<<");
-        break;
-      case 16753245:
-        Serial.println("ch-");
-        break;
-      case 16769565:
-        Serial.println("ch+");
-        break;
-      case 16736925:
-        Serial.println("ch");
-        erstellenpwm();
-        break;
-      default:
-        Serial.println(codeValue);
-        break;
-    }
-    irrecv.resume(); // resume receiver
-  }
+  delay(125);
+  digitalWrite(ledPin, LOW);
+  delay(125);
+  digitalWrite(ledPin, HIGH);
+  delay(125);
+  digitalWrite(ledPin, LOW);
+  delay(125);
+  digitalWrite(ledPin, HIGH);
+  delay(125);
+  digitalWrite(ledPin, LOW);
+  delay(125);
+  digitalWrite(ledPin, HIGH);
+  delay(125);
+  digitalWrite(ledPin, LOW);
+  delay(125);
+  digitalWrite(ledPin, HIGH);
 }
 
-void storeCode(decode_results *results) {
-  codeType = results->decode_type;
-  if (codeType == UNKNOWN) {
-    codeLen = results->rawlen - 1;
-    for (int i = 1; i <= codeLen; i++) {
-      if (i % 2) {
-        rawCodes[i - 1] = results->rawbuf[i] * USECPERTICK - MARK_EXCESS;
-      }
-      else {
-        rawCodes[i - 1] = results->rawbuf[i] * USECPERTICK + MARK_EXCESS;
-      }
-    }
+void PIDE()
+{
+  if (resetpid == 1)
+  {
+    pError_yaw = 0; pError_pitch = 0; pError_roll = 0;
+    iError_yaw = 0; iError_pitch = 0; iError_roll = 0;
+    dError_yaw = 0; dError_pitch = 0; dError_roll = 0;
+    pid_i_yaw = 0; pid_i_pitch = 0; pid_i_roll = 0;
+    pid_output_yaw = 0;
+    pid_output_pitch = 0;
+    pid_output_roll = 0;
+    resetpid = 0;
   }
-  else {
-    if (codeType == NEC) {
-      if (results->value == REPEAT) {
-        return;
-      }
-    }
-    codeValue = results->value;
-    codeLen = results->bits;
-  }
+
+  //YAW
+  pError_yaw = pid_input_yaw - pid_setpoint_yaw; //Looks at the input, compare it to where you want it to be
+  iError_yaw += pError_yaw; // Looks at the pError qnd compares how long it has been that way
+  pid_i_yaw = pid_i_gain_yaw * iError_yaw; //Integral Calculations
+  if (pid_i_yaw > pid_max_yaw) pid_i_yaw = pid_max_yaw; //prevent integral windup by limiting the integral to the max yaw
+  else if (pid_i_yaw < pid_max_yaw * -1) pid_i_yaw = pid_max_yaw * -1;
+  dError_yaw = (pError_yaw - previouspError_yaw);
+
+  pid_output_yaw = (pid_p_gain_yaw * pError_yaw) + pid_i_yaw + (pid_d_gain_yaw * dError_yaw); //Output calculation
+  if (pid_output_yaw > pid_max_yaw) pid_output_yaw = pid_max_yaw;
+  else if (pid_output_yaw < pid_max_yaw * -1) pid_output_yaw = pid_max_yaw * -1;
+
+  //PITCH
+  pError_pitch = pid_input_pitch - pid_setpoint_pitch; //Looks at the input, compare it to where you want it to be
+  iError_pitch += pError_pitch; // Looks at the pError qnd compares how long it has been that way
+  pid_i_pitch = pid_i_gain_pitch * iError_pitch; //integral calculations
+  if (pid_i_pitch > pid_max_pitch) pid_i_pitch = pid_max_pitch; //prevent integral windup by limiting the integral to the max pitch
+  else if (pid_i_pitch < pid_max_pitch * -1) pid_i_pitch = pid_max_pitch * -1;
+  dError_pitch = (pError_pitch - previouspError_pitch);
+
+  pid_output_pitch = (pid_p_gain_pitch * pError_pitch) + pid_i_pitch + (pid_d_gain_pitch * dError_pitch) ; //Output calculation
+  if (pid_output_pitch > pid_max_pitch) pid_output_pitch = pid_max_pitch;
+  else if (pid_output_pitch < pid_max_pitch * -1) pid_output_pitch = pid_max_pitch * -1;
+
+  //ROLL
+  pError_roll = pid_input_roll - pid_setpoint_roll; //Looks at the input, compare it to where you want it to be
+  iError_roll += pError_roll; // Looks at the pError qnd compares how long it has been that way
+  pid_i_roll = pid_i_gain_roll * iError_roll;
+  if (pid_i_roll > pid_max_roll) pid_i_roll = pid_max_roll; //prevent integral windup by limiting the integral to the maximum roll
+  else if (pid_i_roll < pid_max_roll * -1) pid_i_roll = pid_max_roll * -1;
+  dError_roll = (pError_roll - previouspError_roll);
+
+  pid_output_roll = (pid_p_gain_roll * pError_roll) + pid_i_roll + (pid_d_gain_roll * dError_roll); //Output calculation
+  if (pid_output_roll > pid_max_roll) pid_output_roll = pid_max_roll;
+  else if (pid_output_roll < pid_max_roll * -1) pid_output_roll = pid_max_roll * -1;
+
+
+  //Remember previous values
+  previouspError_yaw = pError_yaw;
+  previouspError_pitch = pError_pitch;
+  previouspError_roll = pError_roll;
+  previous_pid_output_yaw = pid_output_yaw;
+  previous_pid_output_pitch = pid_output_pitch;
+  previous_pid_output_roll = pid_output_roll;
+
+  Serial.print("ipitch ");
+  Serial.print(pid_input_pitch);
+  Serial.print("//iroll ");
+  Serial.print(pid_input_roll);
+  Serial.print("//iyaw ");
+  Serial.print(pid_input_yaw);
+
+  Serial.print("\\oroll ");
+  Serial.print(previous_pid_output_roll);
+  Serial.print("\\opitch ");
+  Serial.print(previous_pid_output_pitch);
+  Serial.print("\\oyaw ");
+  Serial.print(previous_pid_output_yaw);
+  
+  Serial.println(" ");
 }
