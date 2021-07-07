@@ -15,15 +15,15 @@ Servo R_F_prop;
 Servo R_B_prop;
 
 //To store the 1000us to 2000us value we create variables and store each channel
-int input_YAW=0;      //In my case channel 4 of the receiver and pin D12 of arduino
-int input_PITCH = 0;  //In my case channel 2 of the receiver and pin D9 of arduino
-int input_ROLL = 0;   //In my case channel 1 of the receiver and pin D8 of arduino
-int input_THROTTLE = 1200; //In my case channel 3 of the receiver and pin D10 of arduino
+int input_YAW = 0;          //In my case channel 4 of the receiver and pin D12 of arduino
+int input_PITCH = 0;        //In my case channel 2 of the receiver and pin D9 of arduino
+int input_ROLL = 0;         //In my case channel 1 of the receiver and pin D8 of arduino
+int input_THROTTLE = 1100;  //In my case channel 3 of the receiver and pin D10 of arduino
 
 // uso del BMP
 int led_sapo = 32, altitud_BMP;
 char flag;
-float temperature, pressure, altitudbar,PromX,PromY;
+float temperature, pressure, altitudbar, PromX, PromY;
 BMP280_DEV bmp280;
 //Gyro Variables
 float elapsedTime = 0, time = 0, timePrev = 0;  //Variables for time control
@@ -48,14 +48,14 @@ int totalp = 0, totaly = 0;
 int averagep = 0, averagey = 0;
 
 ///////////////////////////////ROLL PID CONSTANTS////////////////////
-double roll_kp = 0.057; //3.55
-double roll_ki = 0.03; //0.003
-double roll_kd = 0.01; //2.05
+double roll_kp = 0.057;  //3.55
+double roll_ki = 0.03;   //0.003
+double roll_kd = 0.01;   //2.05
 float roll_desired_angle = 0;
 ///////////////////////////////PITCH PID CONSTANTS///////////////////
-double pitch_kp = 0.057; //3.55
-double pitch_ki = 0.003; //0.003
-double pitch_kd = 0.01; //2.05
+double pitch_kp = 0.057;  //3.55
+double pitch_ki = 0.003;  //0.003
+double pitch_kd = 0.01;   //2.05
 float pitch_desired_angle = 0;
 //////////////////////////////PID FOR PITCH//////////////////////////
 float pitch_PID, pitch_error, pitch_previous_error;
@@ -96,7 +96,7 @@ void setup() {
   Wire.endTransmission(true);
   //mpu.calibrateAccelGyro();
   //mpu.calibrateMag();
-  
+
   /*Here we calculate the acc data error before we start the loop
  * I make the mean of 200 values, that should be enough*/
   if (acc_error == 0) {
@@ -206,7 +206,7 @@ void loop() {
   Total_angle_y = 0.98 * (Total_angle_y + Gyro_angle_y) + 0.02 * Acc_angle_y;
 
   bmp280.getMeasurements(temperature, pressure, altitudbar);
-  
+
   totalp = totalp - readingsp[readIndexp];
   readingsp[readIndexp] = Total_angle_x;
   totalp = totalp + readingsp[readIndexp];
@@ -237,8 +237,8 @@ void loop() {
   //    Serial.print(pitch_desired_angle);
   //    Serial.print("   |   ");
 
-  roll_error =  Total_angle_y - roll_desired_angle;
-  pitch_error =  Total_angle_x - pitch_desired_angle;
+  roll_error = Total_angle_y - roll_desired_angle;
+  pitch_error = Total_angle_x - pitch_desired_angle;
 
   //  Serial.print("roll_error: ");
   //  Serial.print(roll_error);
@@ -256,12 +256,10 @@ void loop() {
   //  Serial.print("pitch_pid_p: ");
   //  Serial.print(pitch_pid_p);
 
-  if (-3 < roll_error < 3)
-  {
+  if (-3 < roll_error < 3) {
     roll_pid_i = roll_pid_i + (roll_ki * roll_error);
   }
-  if (-3 < pitch_error < 3)
-  {
+  if (-3 < pitch_error < 3) {
     pitch_pid_i = pitch_pid_i + (pitch_ki * pitch_error);
   }
 
@@ -305,16 +303,23 @@ void loop() {
   //   pitch_PID = 400;
   // }
 
-input_THROTTLE = 1100;
+  if (MyBlue.available())
+    flag = MyBlue.read();
+  if (flag == 1) {
+    input_THROTTLE = input_THROTTLE + 500;
+    if (input_THROTTLE > 2000)
+      input_THROTTLE = 2000;
+  }
+  if (flag == 2) {
+    input_THROTTLE = input_THROTTLE - 500;
+    if (input_THROTTLE < 1200)
+      input_THROTTLE = 1200;
+  }
 
-  Serial.print("input_THROTTLE: ");
-  Serial.print(input_THROTTLE);
-  Serial.print("   |   ");
-
-  pwm_L_B  = input_THROTTLE - roll_PID - pitch_PID;
-  pwm_L_F  = input_THROTTLE - roll_PID + pitch_PID;
-  pwm_R_F  = input_THROTTLE + roll_PID + pitch_PID;
-  pwm_R_B  = input_THROTTLE + roll_PID - pitch_PID;
+  pwm_L_B = input_THROTTLE - roll_PID - pitch_PID;
+  pwm_L_F = input_THROTTLE - roll_PID + pitch_PID;
+  pwm_R_F = input_THROTTLE + roll_PID + pitch_PID;
+  pwm_R_B = input_THROTTLE + roll_PID - pitch_PID;
 
   //  if (pwm_R_F < 1100)
   //  {
@@ -324,7 +329,7 @@ input_THROTTLE = 1100;
   //  {
   //    pwm_R_F = 2000;
   //  }
-  
+
   //  if (pwm_L_F < 1100)
   //  {
   //    pwm_L_F = 1100;
@@ -333,7 +338,7 @@ input_THROTTLE = 1100;
   //  {
   //    pwm_L_F = 2000;
   //  }
-  
+
   //  if (pwm_R_B < 1100)
   //  {
   //    pwm_R_B = 1100;
@@ -342,7 +347,7 @@ input_THROTTLE = 1100;
   //  {
   //    pwm_R_B = 2000;
   //  }
-  
+
   //  if (pwm_L_B < 1100)
   //  {
   //    pwm_L_B = 1100;
@@ -367,16 +372,7 @@ input_THROTTLE = 1100;
   Serial.print("RB: ");
   Serial.print(pwm_R_B);
 
-  Serial.print("   |   ");
-  Serial.print("Xº: ");
-  Serial.print(Total_angle_y);
-  Serial.print("   |   ");
-  Serial.print("Yº: ");
-  Serial.print(Total_angle_x);
-  Serial.println(" ");
-
-  if (input_THROTTLE <= 800)
-  {
+  if (input_THROTTLE <= 800) {
     L_F_prop.writeMicroseconds(1000);
     L_B_prop.writeMicroseconds(1000);
     R_F_prop.writeMicroseconds(1000);
@@ -386,19 +382,13 @@ input_THROTTLE = 1100;
     pwm_L_B = 1000;
     pwm_R_F = 1000;
     pwm_R_B = 1000;
-  }
-  else
-  {
+  } else {
     L_F_prop.writeMicroseconds(pwm_L_F);
     L_B_prop.writeMicroseconds(pwm_L_B);
     R_F_prop.writeMicroseconds(pwm_R_F);
     R_B_prop.writeMicroseconds(pwm_R_B);
   }
 
-  if (MyBlue.available()) {
-    flag = MyBlue.read();
-    Serial.print(flag);
-  }
   if (temperature != 0) {
     Serial.print("temperature: ");
     Serial.print(temperature);
