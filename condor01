@@ -1,43 +1,51 @@
 #include <Wire.h>
-#include <Servo.h>
-#include <BMP280_DEV.h>
-#include <Device.h>
-#include <MPU9250.h>
 #include <math.h>
-#include <VL53L0X.h>
+#include <Device.h>
+#include <BMP280_DEV.h>
+#include <MPU9250.h>
+#include <SoftwareSerial.h>
+#include <Servo.h>
+//bluetooth HC05 szpilman 1234
+SoftwareSerial MyBlue(10, 11);  // RX | TX
 
+//servos
 Servo L_F_prop;
 Servo L_B_prop;
 Servo R_F_prop;
 Servo R_B_prop;
 
-MPU9250 mpu;
-BMP280_DEV bmp280;
-VL53L0X laseralt;
-
-float temperature, pressure, altitudbar;
-int ledPin = 23, altitudlaser;
-
 //To store the 1000us to 2000us value we create variables and store each channel
-int input_YAW;      //In my case channel 4 of the receiver and pin D12 of arduino
+int input_YAW=0;      //In my case channel 4 of the receiver and pin D12 of arduino
 int input_PITCH = 0;  //In my case channel 2 of the receiver and pin D9 of arduino
 int input_ROLL = 0;   //In my case channel 1 of the receiver and pin D8 of arduino
 int input_THROTTLE = 1200; //In my case channel 3 of the receiver and pin D10 of arduino
 
+// uso del BMP
+int led_sapo = 32, altitud_BMP;
+char flag;
+float temperature, pressure, altitudbar,PromX,PromY;
+BMP280_DEV bmp280;
 //Gyro Variables
-float elapsedTime, time, timePrev;        //Variables for time control
-int gyro_error = 0;                       //We use this variable to only calculate once the gyro data error
-float Gyr_rawX, Gyr_rawY, Gyr_rawZ;       //Here we store the raw data read
-float Gyro_angle_x, Gyro_angle_y;         //Here we store the angle value obtained with Gyro data
-float Gyro_raw_error_x, Gyro_raw_error_y; //Here we store the initial gyro data error
-
+float elapsedTime = 0, time = 0, timePrev = 0;  //Variables for time control
+int gyro_error = 0;                             //We use this variable to only calculate once the gyro data error
+float Gyr_rawX, Gyr_rawY, Gyr_rawZ;             //Here we store the raw data read
+float Gyro_angle_x, Gyro_angle_y;               //Here we store the angle value obtained with Gyro data
+float Gyro_raw_error_x, Gyro_raw_error_y;       //Here we store the initial gyro data error
 //Acc Variables
-int acc_error = 0;                          //We use this variable to only calculate once the Acc data error
-float rad_to_deg = 180 / 3.141592654;       //This value is for pasing from radians to degrees values
-float Acc_rawX, Acc_rawY, Acc_rawZ;         //Here we store the raw data read
-float Acc_angle_x, Acc_angle_y;             //Here we store the angle value obtained with Acc data
-float Acc_angle_error_x, Acc_angle_error_y; //Here we store the initial Acc data error
+int acc_error = 0;                           //We use this variable to only calculate once the Acc data error
+float rad_to_deg = 180 / 3.141592654;        //This value is for pasing from radians to degrees values
+float Acc_rawX, Acc_rawY, Acc_rawZ;          //Here we store the raw data read
+float Acc_angle_x, Acc_angle_y;              //Here we store the angle value obtained with Acc data
+float Acc_angle_error_x, Acc_angle_error_y;  //Here we store the initial Acc data error
 float Total_angle_x, Total_angle_y;
+MPU9250 mpu;
+
+//Averager
+const int numReadingsp = 5, numReadingsy = 5;
+int readingsp[numReadingsp], readingsy[numReadingsy];
+int readIndexp = 0, readIndexy = 0;
+int totalp = 0, totaly = 0;
+int averagep = 0, averagey = 0;
 
 ///////////////////////////////ROLL PID CONSTANTS////////////////////
 double roll_kp = 0.057; //3.55
@@ -60,138 +68,165 @@ float roll_pid_p;
 float roll_pid_i;
 float roll_pid_d;
 
-const int numReadingsr = 10, numReadingsp = 10, numReadingsy = 10;
-int readingsr[numReadingsr], readingsp[numReadingsp], readingsy[numReadingsy];
-int readIndexr = 0, readIndexp = 0, readIndexy = 0;
-int totalr = 0, totalp = 0, totaly = 0;
-int averager = 0, averagep = 0, averagey = 0;
-
+// seteo de una vuelta
 void setup() {
   Wire.begin();
-  pinMode(ledPin, OUTPUT);
   Serial.begin(9600);
-  laseralt.setTimeout(500);
-  if (!laseralt.init())
-  {
-    Serial.println("Failed to detect and initialize sensor!");
-    while (1) {}
-  }
-  laseralt.startContinuous(20);
+  MyBlue.begin(57600);  //Baud Rate for AT-command Mode.
+  Serial.println("***AT commands mode***");
+
   bmp280.begin(0X76);
+  mpu.setup(0x68);  // change to your own address
   bmp280.setTimeStandby(TIME_STANDBY_1000MS);
   bmp280.startNormalConversion();
-  mpu.setup();
-  L_F_prop.attach(2, 1000, 2000);
-  R_F_prop.attach(3, 1000, 2000);
-  R_B_prop.attach(4, 1000, 2000);
-  L_B_prop.attach(5, 1000, 2000);
-  delay(7000);
-  L_F_prop.write(2000);
-  R_F_prop.write(2000);
-  R_B_prop.write(2000);
-  L_B_prop.write(2000);
-  delay(3000);
-  L_F_prop.write(1000);
-  R_F_prop.write(1000);
-  R_B_prop.write(1000);
-  L_B_prop.write(1000);
-  Wire.begin();
-  Wire.beginTransmission(0x68);
-  Wire.write(0x6B);
+
+  Wire.beginTransmission(0x68);  //begin, Send the slave adress (in this case 68)
+  Wire.write(0x6B);              //make the reset (place a 0 into the 6B register)
   Wire.write(0x00);
+  Wire.endTransmission(true);  //end the transmission
+  //Gyro config
+  Wire.beginTransmission(0x68);  //begin, Send the slave adress (in this case 68)
+  Wire.write(0x1B);              //We want to write to the GYRO_CONFIG register (1B hex)
+  Wire.write(0x10);              //Set the register bits as 00010000 (1000dps full scale)
+  Wire.endTransmission(true);    //End the transmission with the gyro
+  //Acc config
+  Wire.beginTransmission(0x68);  //Start communication with the address found during search.
+  Wire.write(0x1C);              //We want to write to the ACCEL_CONFIG register
+  Wire.write(0x10);              //Set the register bits as 00010000 (+/- 8g full scale range)
   Wire.endTransmission(true);
-  Wire.beginTransmission(0x68);
-  Wire.write(0x1B);
-  Wire.write(0x10);
-  Wire.endTransmission(true);
-  Wire.beginTransmission(0x68);
-  Wire.write(0x1C);
-  Wire.write(0x10);
-  Wire.endTransmission(true);
-  delay(1000);
-  time = millis();
-  if (gyro_error == 0)
-  {
-    for (int i = 0; i < 200; i++)
-    {
+  //mpu.calibrateAccelGyro();
+  //mpu.calibrateMag();
+  
+  /*Here we calculate the acc data error before we start the loop
+ * I make the mean of 200 values, that should be enough*/
+  if (acc_error == 0) {
+    for (int a = 0; a < 200; a++) {
       Wire.beginTransmission(0x68);
-      Wire.write(0x43);
-      Wire.endTransmission(false);
-      Wire.requestFrom(0x68, 4, true);
-      Gyr_rawX = Wire.read() << 8 | Wire.read();
-      Gyr_rawY = Wire.read() << 8 | Wire.read();
-      Gyro_raw_error_x = Gyro_raw_error_x + (Gyr_rawX / 32.8);
-      Gyro_raw_error_y = Gyro_raw_error_y + (Gyr_rawY / 32.8);
-      if (i == 199)
-      {
-        Gyro_raw_error_x = Gyro_raw_error_x / 200;
-        Gyro_raw_error_y = Gyro_raw_error_y / 200;
-        gyro_error = 1;
-      }
-    }
-  }
-  if (acc_error == 0)
-  {
-    for (int a = 0; a < 200; a++)
-    {
-      Wire.beginTransmission(0x68);
-      Wire.write(0x3B);
+      Wire.write(0x3B);  //Ask for the 0x3B register- correspond to AcX
       Wire.endTransmission(false);
       Wire.requestFrom(0x68, 6, true);
-      Acc_rawX = (Wire.read() << 8 | Wire.read()) / 4096.0 ; //each value needs two registres
-      Acc_rawY = (Wire.read() << 8 | Wire.read()) / 4096.0 ;
-      Acc_rawZ = (Wire.read() << 8 | Wire.read()) / 4096.0 ;
+      Acc_rawX = (Wire.read() << 8 | Wire.read()) / 4096.0;  //each value needs two registres
+      Acc_rawY = (Wire.read() << 8 | Wire.read()) / 4096.0;
+      Acc_rawZ = (Wire.read() << 8 | Wire.read()) / 4096.0;
+      /*---X---*/
       Acc_angle_error_x = Acc_angle_error_x + ((atan((Acc_rawY) / sqrt(pow((Acc_rawX), 2) + pow((Acc_rawZ), 2))) * rad_to_deg));
+      /*---Y---*/
       Acc_angle_error_y = Acc_angle_error_y + ((atan(-1 * (Acc_rawX) / sqrt(pow((Acc_rawY), 2) + pow((Acc_rawZ), 2))) * rad_to_deg));
-      if (a == 199)
-      {
+      if (a == 199) {
         Acc_angle_error_x = Acc_angle_error_x / 200;
         Acc_angle_error_y = Acc_angle_error_y / 200;
         acc_error = 1;
       }
     }
-  }
+  }  //end of acc error calculation
+  /*Here we calculate the gyro data error before we start the loop
+ * I make the mean of 200 values, that should be enough*/
+  if (gyro_error == 0) {
+    for (int i = 0; i < 200; i++) {
+      Wire.beginTransmission(0x68);  //begin, Send the slave adress (in this case 68)
+      Wire.write(0x43);              //First adress of the Gyro data
+      Wire.endTransmission(false);
+      Wire.requestFrom(0x68, 4, true);            //We ask for just 4 registers
+      Gyr_rawX = Wire.read() << 8 | Wire.read();  //Once again we shif and sum
+      Gyr_rawY = Wire.read() << 8 | Wire.read();
+      /*---X---*/
+      Gyro_raw_error_x = Gyro_raw_error_x + (Gyr_rawX / 32.8);
+      /*---Y---*/
+      Gyro_raw_error_y = Gyro_raw_error_y + (Gyr_rawY / 32.8);
+      if (i == 199) {
+        Gyro_raw_error_x = Gyro_raw_error_x / 200;
+        Gyro_raw_error_y = Gyro_raw_error_y / 200;
+        gyro_error = 1;
+      }
+    }
+  }  //end of gyro error calculation
+
+  L_F_prop.attach(2, 1000, 2000);
+  R_F_prop.attach(3, 1000, 2000);
+  R_B_prop.attach(4, 1000, 2000);
+  L_B_prop.attach(5, 1000, 2000);
+  delay(7000);
+  L_F_prop.writeMicroseconds(2000);
+  R_F_prop.writeMicroseconds(2000);
+  R_B_prop.writeMicroseconds(2000);
+  L_B_prop.writeMicroseconds(2000);
+  delay(3000);
+  L_F_prop.writeMicroseconds(1000);
+  R_F_prop.writeMicroseconds(1000);
+  R_B_prop.writeMicroseconds(1000);
+  L_B_prop.writeMicroseconds(1000);
+
   mpu.update();
   bmp280.getMeasurements(temperature, pressure, altitudbar);
-  for (int thisReading = 0; thisReading < numReadingsr; thisReading++) {
-    readingsr[thisReading] = 0;
-  }
-  for (int thisReading = 0; thisReading < numReadingsp; thisReading++) {
-    readingsp[thisReading] = 0;
-  }
-  for (int thisReading = 0; thisReading < numReadingsy; thisReading++) {
-    readingsy[thisReading] = 0;
-  }
-  delay(2000);
-  ledblink();
+  Serial.println("corriendo");
 }
 
+
+//constante ciclo
 void loop() {
-  timePrev = time;
   time = millis();
-  elapsedTime = (time - timePrev) / 1000;
-  altitud();
-  Wire.beginTransmission(0x68);
-  Wire.write(0x43);
+  elapsedTime = (time - timePrev);
+  if (elapsedTime >= 1000) {
+    timePrev = time;
+    if (digitalRead(led_sapo) == 1)
+      digitalWrite(led_sapo, LOW);
+    if (digitalRead(led_sapo) == 0)
+      digitalWrite(led_sapo, HIGH);
+  }
+
+  //////////////////////////////////////Gyro read/////////////////////////////////////
+  Wire.beginTransmission(0x68);  //begin, Send the slave adress (in this case 68)
+  Wire.write(0x43);              //First adress of the Gyro data
   Wire.endTransmission(false);
-  Wire.requestFrom(0x68, 4, true);
-  Gyr_rawX = Wire.read() << 8 | Wire.read();
+  Wire.requestFrom(0x68, 4, true);            //We ask for just 4 registers
+  Gyr_rawX = Wire.read() << 8 | Wire.read();  //Once again we shif and sum
   Gyr_rawY = Wire.read() << 8 | Wire.read();
+  /*Now in order to obtain the gyro data in degrees/seconds we have to divide first
+  the raw value by 32.8 because that's the value that the datasheet gives us for a 1000dps range*/
+  /*---X---*/
   Gyr_rawX = (Gyr_rawX / 32.8) - Gyro_raw_error_x;
+  /*---Y---*/
   Gyr_rawY = (Gyr_rawY / 32.8) - Gyro_raw_error_y;
-  Gyro_angle_x = Gyr_rawX * elapsedTime;
-  Gyro_angle_y = Gyr_rawY * elapsedTime;
-  Wire.beginTransmission(0x68);
-  Wire.write(0x3B);
-  Wire.endTransmission(false);
-  Wire.requestFrom(0x68, 6, true);
-  Acc_rawX = (Wire.read() << 8 | Wire.read()) / 4096.0 ; //each value needs two registres
-  Acc_rawY = (Wire.read() << 8 | Wire.read()) / 4096.0 ;
-  Acc_rawZ = (Wire.read() << 8 | Wire.read()) / 4096.0 ;
+  Gyro_angle_x = Gyr_rawX;                               // * elapsedTime;
+  Gyro_angle_y = Gyr_rawY;                               // * elapsedTime;
+  Wire.beginTransmission(0x68);                          //begin, Send the slave adress (in this case 68)
+  Wire.write(0x3B);                                      //Ask for the 0x3B register- correspond to AcX
+  Wire.endTransmission(false);                           //keep the transmission and next
+  Wire.requestFrom(0x68, 6, true);                       //We ask for next 6 registers starting withj the 3B
+  Acc_rawX = (Wire.read() << 8 | Wire.read()) / 4096.0;  //each value needs two registres
+  Acc_rawY = (Wire.read() << 8 | Wire.read()) / 4096.0;
+  Acc_rawZ = (Wire.read() << 8 | Wire.read()) / 4096.0;
+  /*Now in order to obtain the Acc angles we use euler formula with acceleration values
+  after that we substract the error value found before*/
+  /*---X---*/
   Acc_angle_x = (atan((Acc_rawY) / sqrt(pow((Acc_rawX), 2) + pow((Acc_rawZ), 2))) * rad_to_deg) - Acc_angle_error_x;
+  /*---Y---*/
   Acc_angle_y = (atan(-1 * (Acc_rawX) / sqrt(pow((Acc_rawY), 2) + pow((Acc_rawZ), 2))) * rad_to_deg) - Acc_angle_error_y;
   Total_angle_x = 0.98 * (Total_angle_x + Gyro_angle_x) + 0.02 * Acc_angle_x;
   Total_angle_y = 0.98 * (Total_angle_y + Gyro_angle_y) + 0.02 * Acc_angle_y;
+
+  bmp280.getMeasurements(temperature, pressure, altitudbar);
+  
+  totalp = totalp - readingsp[readIndexp];
+  readingsp[readIndexp] = Total_angle_x;
+  totalp = totalp + readingsp[readIndexp];
+  readIndexp = readIndexp + 1;
+  if (readIndexp >= numReadingsp) {
+    readIndexp = 0;
+  }
+  averagep = totalp / numReadingsp;
+  PromX = averagep;
+
+  totaly = totaly - readingsy[readIndexy];
+  readingsy[readIndexy] = Total_angle_y;
+  totaly = totaly + readingsy[readIndexy];
+  readIndexy = readIndexy + 1;
+  if (readIndexy >= numReadingsy) {
+    readIndexy = 0;
+  }
+  averagey = totaly / numReadingsy;
+  PromY = averagey;
+
   roll_desired_angle = 0;
   pitch_desired_angle = 0;
 
@@ -257,22 +292,20 @@ void loop() {
   //  Serial.print("pitch_PID: ");
   //  Serial.print(pitch_PID);
 
-  if (roll_PID < -400) {
-    roll_PID = -400;
-  }
-  if (roll_PID > 400) {
-    roll_PID = 400;
-  }
-  if (pitch_PID < -4000) {
-    pitch_PID = -400;
-  }
-  if (pitch_PID > 400) {
-    pitch_PID = 400;
-  }
+  // if (roll_PID < -400) {
+  //   roll_PID = -400;
+  // }
+  // if (roll_PID > 400) {
+  //   roll_PID = 400;
+  // }
+  // if (pitch_PID < -400) {
+  //   pitch_PID = -400;
+  // }
+  // if (pitch_PID > 400) {
+  //   pitch_PID = 400;
+  // }
 
-  input_THROTTLE = altitudlaser;
-
-  //input_THROTTLE = 1100;
+input_THROTTLE = 1100;
 
   Serial.print("input_THROTTLE: ");
   Serial.print(input_THROTTLE);
@@ -291,7 +324,7 @@ void loop() {
   //  {
   //    pwm_R_F = 2000;
   //  }
-  //
+  
   //  if (pwm_L_F < 1100)
   //  {
   //    pwm_L_F = 1100;
@@ -300,7 +333,7 @@ void loop() {
   //  {
   //    pwm_L_F = 2000;
   //  }
-  //
+  
   //  if (pwm_R_B < 1100)
   //  {
   //    pwm_R_B = 1100;
@@ -309,7 +342,7 @@ void loop() {
   //  {
   //    pwm_R_B = 2000;
   //  }
-  //
+  
   //  if (pwm_L_B < 1100)
   //  {
   //    pwm_L_B = 1100;
@@ -362,39 +395,33 @@ void loop() {
     R_B_prop.writeMicroseconds(pwm_R_B);
   }
 
-}
-
-void ledblink()
-{
-  delay(125);
-  digitalWrite(ledPin, LOW);
-  delay(125);
-  digitalWrite(ledPin, HIGH);
-  delay(125);
-  digitalWrite(ledPin, LOW);
-  delay(125);
-  digitalWrite(ledPin, HIGH);
-  delay(125);
-  digitalWrite(ledPin, LOW);
-  delay(125);
-  digitalWrite(ledPin, HIGH);
-  delay(125);
-  digitalWrite(ledPin, LOW);
-  delay(125);
-  digitalWrite(ledPin, HIGH);
-}
-
-void altitud()
-{
-  bmp280.getMeasurements(temperature, pressure, altitudbar);
-
-  totalp = totalp - readingsp[readIndexp];
-  readingsp[readIndexp] =  laseralt.readRangeContinuousMillimeters();
-  totalp = totalp + readingsp[readIndexp];
-  readIndexp = readIndexp + 1;
-  if (readIndexp >= numReadingsp) {
-    readIndexp = 0;
+  if (MyBlue.available()) {
+    flag = MyBlue.read();
+    Serial.print(flag);
   }
-  averagep = totalp / numReadingsp;
-  altitudlaser = averagep;
+  if (temperature != 0) {
+    Serial.print("temperature: ");
+    Serial.print(temperature);
+    Serial.print("   |   ");
+    Serial.print("pressure: ");
+    Serial.print(pressure);
+    Serial.print("   |   ");
+    Serial.print("altitudbar: ");
+    Serial.print(altitudbar);
+  }
+  Serial.print("   |   ");
+  Serial.print("PromX: ");
+  Serial.print(PromX);
+  Serial.print("   |   ");
+  Serial.print("PromY: ");
+  Serial.print(PromY);
+  Serial.print(" | ");
+  Serial.print("time: ");
+  Serial.print(time);
+  Serial.print(" | ");
+  Serial.print("timePrev: ");
+  Serial.print(timePrev);
+  Serial.print(" | ");
+  Serial.print("elapsedTime: ");
+  Serial.println(elapsedTime);
 }
